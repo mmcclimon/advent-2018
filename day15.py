@@ -8,8 +8,28 @@ def main():
         lines = [line.strip() for line in f]
 
     grid = Grid(lines)
+    print("part 1:", grid.play_game())
 
-    grid.play_game()
+    print("part 2:", elves_must_win(lines))
+
+
+def elves_must_win(lines):
+    print("searching for elves best attack power")
+    L, R = 3, 200
+    elf_score = 0
+
+    while L <= R:
+        atk = (L + R) // 2
+        grid = Grid(lines, elf_atk=atk)
+        try:
+            elf_score = grid.play_game(True)
+            R = atk - 1
+            print(f"  elves win with atk={atk}")
+        except ElfDied:
+            print(f"  elf dies with atk={atk}.")
+            L = atk + 1
+
+    return elf_score
 
 
 class Kind(StrEnum):
@@ -55,8 +75,12 @@ class Attacker:
         return False
 
 
+class ElfDied(Exception):
+    pass
+
+
 class Grid:
-    def __init__(self, lines):
+    def __init__(self, lines, elf_atk=3):
         self.max_r = len(lines)
         self.max_c = len(lines[0])
 
@@ -66,6 +90,8 @@ class Grid:
             for c, char in enumerate(line):
                 kind = Kind.from_str(char)
                 self.g[r, c] = Attacker(kind) if kind.is_attacker() else Tile(kind)
+                if kind == Kind.ELF:
+                    self.g[r, c].atk = elf_atk
 
     def __str__(self):
         lines = []
@@ -84,22 +110,20 @@ class Grid:
     def non_walls(self):
         return sorted(pos for pos, ent in self.g.items() if ent.kind != Kind.WALL)
 
-    def play_game(self):
+    def play_game(self, elf_priority=False):
         rounds_completed = 0
 
         while True:
-            go_on = self.do_round()
+            go_on = self.do_round(elf_priority)
             if not go_on:
                 break
 
             rounds_completed += 1
 
-        print(self)
-        print(f"game ends after {rounds_completed} rounds")
         hp = sum(self.g[pos].hp for pos in self.attackers())
-        print(hp * rounds_completed)
+        return hp * rounds_completed
 
-    def do_round(self):
+    def do_round(self, elf_priority=False):
         to_move = self.attackers()
 
         for pos in to_move:
@@ -116,6 +140,9 @@ class Grid:
                 target = self.g[tpos]
                 target.hp -= who.atk
                 if target.hp <= 0:
+                    if elf_priority and target.kind == Kind.ELF:
+                        raise ElfDied
+
                     self.g[tpos] = Tile(Kind.OPEN)
 
         return True
