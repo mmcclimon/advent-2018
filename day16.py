@@ -6,157 +6,129 @@ def main():
     with open("d16.txt") as f:
         lines = [line.strip() for line in f]
 
-    funcs = {
-        "addr": make_reg(operator.add),
-        "addi": make_imm(operator.add),
-        "mulr": make_reg(operator.mul),
-        "muli": make_imm(operator.mul),
-        "banr": make_reg(operator.and_),
-        "bani": make_imm(operator.and_),
-        "borr": make_reg(operator.or_),
-        "bori": make_imm(operator.or_),
-        "setr": setr,
-        "seti": seti,
-        "gtir": make_comp_ir(operator.gt),
-        "gtri": make_comp_ri(operator.gt),
-        "gtrr": make_comp_rr(operator.gt),
-        "eqir": make_comp_ir(operator.eq),
-        "eqri": make_comp_ri(operator.eq),
-        "eqrr": make_comp_rr(operator.eq),
-    }
+    funcs = make_funcs()
 
+    p1, possibles = part_one(funcs, lines[:3127])
+    print("part 1:", p1)
+
+    opcodes = resolve_ops(funcs, possibles)
+    print("part 2:", run_program(opcodes, lines[3130:]))
+
+
+def part_one(funcs, lines):
+    opcodes = {op: set() for op in range(16)}
     multiples = 0
 
-    opcodes = {op: set() for op in range(16)}
+    for i in range(0, len(lines), 4):
+        before = reg_from_line(lines[i])
+        instr = [int(n) for n in lines[i + 1].split()]
+        after = reg_from_line(lines[i + 2])
+        matches = check(funcs, before, instr, after)
 
-    i = 0
-    while i < 3130:
-        if lines[i].startswith("Before:"):
-            before = reg_from_line(lines[i])
-            instr = tuple(int(n) for n in lines[i + 1].split())
-            after = reg_from_line(lines[i + 2])
-            matches = check(funcs, before, instr, after)
+        if len(matches) >= 3:
+            multiples += 1
 
-            if len(matches) >= 3:
-                multiples += 1
+        opcode = instr[0]
+        for match in matches:
+            opcodes[opcode].add(match)
 
-            opcode = instr[0]
-            for match in matches:
-                opcodes[opcode].add(match)
-
-            i += 2
-
-        i += 1
-
-    print("part 1:", multiples)
-
-    seen = set()
-    lookup = {}
-
-    while len(seen) < 16:
-        k = next(k for k, possible in opcodes.items() if len(possible) == 1)
-        seen.add(k)
-
-        to_remove = opcodes[k].pop()
-        lookup[k] = funcs[to_remove]
-        for op, s in opcodes.items():
-            s.discard(to_remove)
-
-    print("part 2:", run_program(lookup, lines[3130:]))
+    return multiples, opcodes
 
 
 def reg_from_line(line):
     m = re.match(r"(?:Before|After):\s+\[(\d+), (\d+), (\d+), (\d+)\]", line)
     assert m is not None, line
-    return tuple(int(n) for n in m.groups())
+    return [int(n) for n in m.groups()]
 
 
 def check(funcs, before, instr, after):
     match = []
 
     for label, fn in funcs.items():
-        # print(label, ":")
-        compare = fn(instr, before)
-        # print(f"after {label}, {before} -> {compare}")
-        if compare == after:
+        reg = list(before)  # do not reuse the one we just did!
+        fn(instr, reg)
+        if tuple(reg) == tuple(after):
             match.append(label)
 
     return match
 
 
-def make_reg(op):
-    def fn(instr, reg):
-        out = list(reg)
-        opcode, a, b, c = instr
-        out[c] = op(reg[a], reg[b])
-        return tuple(out)
+def resolve_ops(funcs, possibles):
+    seen = set()
+    lookup = {}
 
-    return fn
+    while len(seen) < 16:
+        k = next(k for k, possible in possibles.items() if len(possible) == 1)
+        seen.add(k)
+
+        to_remove = possibles[k].pop()
+        lookup[k] = funcs[to_remove]
+        for s in possibles.values():
+            s.discard(to_remove)
+
+    return lookup
 
 
 def run_program(funcs, lines):
     reg = [0, 0, 0, 0]
 
     for line in lines:
-        instr = tuple(int(n) for n in line.split())
+        instr = [int(n) for n in line.split()]
         fn = funcs[instr[0]]
-        reg = list(fn(instr, reg))
+        fn(instr, reg)
 
     return reg[0]
 
 
-def make_imm(op):
+# helpers
+
+
+def make_funcs():
+    reg = lambda registers, k: registers[k]  # noqa
+    imm = lambda registers, k: k  # noqa
+
+    return {
+        "addr": make_op(operator.add, reg),
+        "addi": make_op(operator.add, imm),
+        "mulr": make_op(operator.mul, reg),
+        "muli": make_op(operator.mul, imm),
+        "banr": make_op(operator.and_, reg),
+        "bani": make_op(operator.and_, imm),
+        "borr": make_op(operator.or_, reg),
+        "bori": make_op(operator.or_, imm),
+        "setr": make_assn(reg),
+        "seti": make_assn(imm),
+        "gtir": make_cmp(operator.gt, imm, reg),
+        "gtri": make_cmp(operator.gt, reg, imm),
+        "gtrr": make_cmp(operator.gt, reg, reg),
+        "eqir": make_cmp(operator.eq, imm, reg),
+        "eqri": make_cmp(operator.eq, reg, imm),
+        "eqrr": make_cmp(operator.eq, reg, reg),
+    }
+
+
+def make_op(op, lookup):
     def fn(instr, reg):
-        out = list(reg)
-        opcode, a, b, c = instr
-        out[c] = op(reg[a], b)
-        return tuple(out)
+        _, a, b, c = instr
+        reg[c] = op(reg[a], lookup(reg, b))
 
     return fn
 
 
-def make_comp_ir(op):
+def make_cmp(op, lookup_a, lookup_b):
     def fn(instr, reg):
-        out = list(reg)
-        opcode, a, b, c = instr
-        out[c] = 1 if op(a, reg[b]) else 0
-        return tuple(out)
+        _, a, b, c = instr
+        reg[c] = 1 if op(lookup_a(reg, a), lookup_b(reg, b)) else 0
 
     return fn
 
 
-def make_comp_ri(op):
+def make_assn(lookup):
     def fn(instr, reg):
-        out = list(reg)
-        opcode, a, b, c = instr
-        out[c] = 1 if op(reg[a], b) else 0
-        return tuple(out)
+        _, a, _, c = instr
+        reg[c] = lookup(reg, a)
 
     return fn
-
-
-def make_comp_rr(op):
-    def fn(instr, reg):
-        out = list(reg)
-        opcode, a, b, c = instr
-        out[c] = 1 if op(reg[a], reg[b]) else 0
-        return tuple(out)
-
-    return fn
-
-
-def setr(instr, reg):
-    out = list(reg)
-    opcode, a, b, c = instr
-    out[c] = reg[a]
-    return tuple(out)
-
-
-def seti(instr, reg):
-    out = list(reg)
-    opcode, a, b, c = instr
-    out[c] = a
-    return tuple(out)
 
 
 if __name__ == "__main__":
